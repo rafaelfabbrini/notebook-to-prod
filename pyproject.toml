@@ -1,0 +1,17 @@
+[project]
+name = "notebook-to-prod"
+version = "0.1.0"
+description = "Pipeline and API for property valuation using ML"
+requires-python = ">=3.11"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+exclude = ["__pycache__", ".venv", "docker", "artifacts", "data"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "C90", "A", "N"]
+
+[tool.ruff.format]
+docstring-code-format = true
+skip-magic-trailing-comma = false
