@@ -116,8 +116,8 @@ def info(
         A dictionary with the latest registered model name and version.
     """
     return {
-        "model_name": pipeline.model_store._model_name,
-        "model_version": pipeline.model_store._get_latest_model_version(),
+        "model_name": pipeline.store._model_name,
+        "model_version": str(pipeline.store._get_latest_model_version()),
     }
 
 
@@ -156,7 +156,7 @@ def predict(
     logger.info(
         f"request_id=%s | model_version=%s | {target}=%.2f",
         request.headers.get("X-Request-ID", "n/a"),
-        pipeline.model_store._get_latest_model_version(),
+        pipeline.store._get_latest_model_version(),
         prediction,
     )
 

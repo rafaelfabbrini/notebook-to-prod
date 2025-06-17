@@ -58,7 +58,7 @@ graph LR
 ## Getting started
 
 ### Prerequisites
-* Python ≥ 3.11  
+* Python ≥ 3.10
 * Docker & Docker Compose  
 * Make (optional but convenient)
 
@@ -79,7 +79,7 @@ $ make train DATA_PATH=/path/to/data.csv
 $ make run-api  # http://localhost:8000/docs
 
 # 4. Generate predictions
-$ make predict PREDICT_FILE=/path/to/file.json
+$ make predict file=/path/to/file.json
 ```
 
 ---
@@ -140,11 +140,10 @@ Start server:
 $ make run-api
 ```
 
-Example request:
+Make request:
 
 ```bash
-$ curl -X POST http://localhost:8000/predict        -H "X-API-Key: replace-me"        -H "Content-Type: application/json"        -d '{"surface_m2": 120, "bedrooms": 3, "bathrooms": 2,
-            "year_built": 2010, "type": "apartment", "sector": "Providencia"}'
+make predict file=/path/to/file.json
 ```
 
 Response:
@@ -185,9 +184,12 @@ notebook-to-prod/
 │   ├── data.py            # Data loader interfaces
 │   ├── evaluate.py        # Model evaluation wrapper
 │   └── main.py            # Main training script
+├── scripts/               # Scripts folder
+│   └── init_mlflow.py     # Initialise mlflow directories
 ├── .env.template          # Template for .env file
 ├── basic-model.ipynb      # Input Jupyter Notebook
 ├── Dockerfile.api         # Inference container
+├── Dockerfile.mlflow      # MLflow container
 ├── Dockerfile.train       # Training container
 ├── Makefile               # DX helpers
 ├── pyproject.toml         # Lint/format config
@@ -216,6 +218,20 @@ Pre-commit hooks are recommended to automate the above checks.
 
 * Tracking & registry URI defaults to `file:./mlruns`; switch to a remote store by changing
   `DEFAULT_MODEL_TRACKING_URI` / `DEFAULT_MODEL_REGISTRY_URI`.
+
+### MLflow Commands
+
+```bash
+# Build the MLflow UI container
+$ make build-mlflow
+
+# Start the MLflow UI (available at http://localhost:5000)
+$ make mlflow
+
+# Initialize MLflow directory (if not already done)
+$ make init-mlflow
+```
+
 * Promote the latest model manually:
 
 ```bash
@@ -258,5 +274,3 @@ MLflow UI surfaces metrics, artefacts, and lineage for auditability.
 ## Acknowledgements
 * FastAPI & Pydantic teams for first-class developer UX  
 * The MLflow open-source community  
-
-> Crafted with ❤️ & strict typing.

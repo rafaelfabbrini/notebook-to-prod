@@ -7,11 +7,15 @@ scikit-learn estimators either locally (``file:`` URIs) or in a remote MLflow
 service.
 """
 
+import json
+from pathlib import Path
+
 import mlflow
-from config import settings
 from mlflow.tracking import MlflowClient
 from sklearn.base import BaseEstimator
 from sklearn.pipeline import Pipeline
+
+from core.config import settings
 
 
 class ModelStore:
@@ -29,6 +33,8 @@ class ModelStore:
         _tracking_uri: MLflow Tracking URI (runs and artefacts).
         _registry_uri: MLflow Model Registry URI (may differ from tracking).
         _client: Low-level :class:`mlflow.tracking.MlflowClient` instance.
+        artifacts_dir: Directory for storing model artifacts.
+        metrics_path: Path to the metrics JSON file.
     """
 
     def __init__(
@@ -48,27 +54,26 @@ class ModelStore:
         self._model_name = model_name
         self._tracking_uri = tracking_uri
         self._registry_uri = registry_uri
-        self._client = MlflowClient(tracking_uri=self._tracking_uri)
-        mlflow.set_tracking_uri(self._tracking_uri)
-        mlflow.set_registry_uri(self._registry_uri)
+        self.metrics_path = Path("metrics.json")
+        self.artifacts_dir = Path("artifacts")
+        self._client = MlflowClient(
+            tracking_uri=self._tracking_uri, registry_uri=self._registry_uri
+        )
+        self.experiment_id = self._setup_experiment()
 
     def save(
         self,
         model: Pipeline | BaseEstimator,
-        artifact_path: str | None = None,
-        metrics: dict[str, float] | None = None,
-        artifact_files: list[str] | None = None,
+        input_example: dict | None = None,
     ) -> None:
         """
         Log a fitted estimator and register it.
 
         Args:
-            model: Trained scikit-learn estimator or pipeline.
-            artifact_path: Sub-directory inside the MLflow run where the model is
-                logged. Defaults to the model name.
-            metrics: Optional mapping of metric names to float values.
-            artifact_files: Extra files (for example plots) to log alongside the
-                model.
+            model: A fitted scikit-learn Pipeline or BaseEstimator to be logged and
+            registered.
+            input_example: Optional dictionary containing a sample input for MLflow
+                model signature inference.
 
         Raises:
             TypeError: If *model* is not a scikit-learn estimator.
@@ -76,20 +81,23 @@ class ModelStore:
         if not isinstance(model, Pipeline | BaseEstimator):
             raise TypeError("Only scikit-learn models are supported.")
 
-        if not artifact_path:
-            artifact_path = self._model_name
-
-        with mlflow.start_run(run_name=f"{self._model_name}_train") as run:
-            model_uri = f"runs:/{run.info.run_id}/{artifact_path}"
-            mlflow.sklearn.log_model(model, artifact_path=artifact_path)
+        with mlflow.start_run(
+            run_name=f"{self._model_name}-train", experiment_id=self.experiment_id
+        ):
+            model_path = "model"
+            mlflow.sklearn.log_model(
+                model, artifact_path=model_path, input_example=input_example
+            )
+            model_uri = f"{mlflow.get_artifact_uri()}/{model_path}"
             mlflow.register_model(model_uri, self._model_name)
 
-            if metrics:
+            if self.metrics_path.exists():
+                with open(self.metrics_path) as file:
+                    metrics = json.load(file)
                 mlflow.log_metrics(metrics)
 
-            if artifact_files:
-                for file in artifact_files:
-                    mlflow.log_artifact(file)
+            if self.artifacts_dir.exists() and any(self.artifacts_dir.iterdir()):
+                mlflow.log_artifacts(str(self.artifacts_dir), artifact_path="plots")
 
     def load(self, version: str | None = None) -> Pipeline | BaseEstimator:
         """
@@ -121,6 +129,37 @@ class ModelStore:
 
         return mlflow.sklearn.load_model(model_uri)
 
+    def _setup_experiment(self, name: str = "PropertyValuation") -> str:
+        """
+        Ensures a single persistent MLflow experiment exists, and sets it for current
+        run context. This is only done once across the pipeline's lifetime — not per
+        run.
+
+        Parameters
+        ----------
+        name : str
+            The name of the MLflow experiment to create or reuse.
+
+        Notes
+        -----
+        This function resolves the path to an absolute URI and ensures consistent
+        behavior across environments, including local and Dockerized setups.
+
+        Returns
+        -------
+        str
+            The experiment ID of the created or existing experiment.
+        """
+        experiment = self._client.get_experiment_by_name(name)
+        if experiment is None:
+            experiment_id = self._client.create_experiment(
+                name, artifact_location=self._tracking_uri
+            )
+        else:
+            experiment_id = experiment.experiment_id
+
+        return experiment_id
+
     def _exists(self, version: str | None = None) -> bool:
         """
         Check whether the model (optionally a specific version) exists.
@@ -142,12 +181,12 @@ class ModelStore:
         except mlflow.exceptions.RestException:
             return False
 
-    def _get_latest_model_version(self) -> str:
+    def _get_latest_model_version(self) -> int:
         """
         Return the most recent registered model version.
 
         Returns:
-            Latest version identifier as a string.
+            Latest version identifier as a integer.
 
         Raises:
             ValueError: If the model has no registered versions.

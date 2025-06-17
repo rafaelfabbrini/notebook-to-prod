@@ -8,11 +8,11 @@ online prediction in a single class suitable for both batch and real-time use.
 
 import pandas as pd
 from category_encoders import TargetEncoder
-from model import ModelStore
 from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.pipeline import Pipeline
 
+from core.model import ModelStore
 from core.schemas import PipelineInput, PipelineOutput
 from core.validation import DataValidator, PipelineValidator
 
@@ -30,10 +30,11 @@ class ModelPipeline:
 
     def __init__(self):
         """Initialise the pipeline and associated :class:`ModelStore`."""
-        self.model_store = ModelStore()
+        self.pipeline = self._create_pipeline()
+        self.store = ModelStore()
+        self._input_example = None
 
-    @property
-    def pipeline(self) -> Pipeline:
+    def _create_pipeline(self) -> Pipeline:
         """
         Construct the preprocessing-plus-model pipeline.
 
@@ -49,7 +50,8 @@ class ModelPipeline:
                     TargetEncoder(),
                     PipelineInput.get_categorical_fields(),
                 )
-            ]
+            ],
+            remainder="passthrough",
         )
         model = GradientBoostingRegressor(**HYPERPARAMETERS)
         return Pipeline(
@@ -61,13 +63,29 @@ class ModelPipeline:
 
     def train(self, data: pd.DataFrame) -> None:
         """
-        Validate and fit the model.
+        This method validates the training data, fits the pipeline, and stores a
+        representative input example from the validated feature data for MLflow
+        model signature inference.
 
         Args:
             data: Training dataset containing both features and target column.
         """
         feature_data, target_data = DataValidator.validate_training_data(data)
         self.pipeline.fit(feature_data, target_data)
+        self._input_example = feature_data.iloc[0].to_dict()
+
+    def save(self) -> None:
+        """
+        Save the trained pipeline to the model store.
+
+        This method persists the trained pipeline to MLflow, registering it under the
+        name specified in the model store configuration. Any metrics and artifacts
+        generated during training are automatically logged alongside the model.
+
+        Raises:
+            TypeError: If the pipeline is not a scikit-learn estimator.
+        """
+        self.store.save(self.pipeline, input_example=self._input_example)
 
     def predict(self, input_data: PipelineInput) -> PipelineOutput:
         """
@@ -80,14 +98,14 @@ class ModelPipeline:
             A :class:`core.schemas.PipelineOutput` with the predicted target
             value.
         """
-        pipeline = self.model_store.load()
+        pipeline = self.store.load()
         PipelineValidator(pipeline, self.pipeline).validate()
         data = self._prepare_input(input_data)
         prediction = pipeline.predict(data)[0]
         return PipelineOutput.from_prediction(prediction)
 
     @staticmethod
-    def _prepare_input(input_data: PipelineInput) -> list[list]:
+    def _prepare_input(input_data: PipelineInput) -> pd.DataFrame:
         """
         Transform structured input data into model-ready format.
 
@@ -95,9 +113,11 @@ class ModelPipeline:
             input_data: Typed feature payload.
 
         Returns:
-            A two-dimensional list matching the pipeline’s expected order of
-            features.
+            A pandas DataFrame containing the input features in the order expected
+            by the pipeline.
         """
         features = PipelineInput.get_features()
         input_dict = input_data.model_dump()
-        return [[input_dict[feature] for feature in features]]
+        return pd.DataFrame(
+            {feature: input_dict[feature] for feature in features}, index=[0]
+        )

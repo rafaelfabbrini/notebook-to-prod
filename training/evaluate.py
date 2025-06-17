@@ -12,6 +12,7 @@ Both plots are saved to disk so they can be logged as artefacts alongside the
 model.
 """
 
+import json
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -31,6 +32,7 @@ class ModelEvaluator:
     Args:
         pipeline: Fitted scikit-learn pipeline.
         data: Raw training dataset containing both features and target.
+        artifacts_dir: Directory where evaluation artifacts will be saved.
 
     Attributes:
         _pipeline: The fitted pipeline passed at construction.
@@ -38,32 +40,38 @@ class ModelEvaluator:
         _feature_data: Features validated by :class:`DataValidator`.
         _target_data: Target column validated by :class:`DataValidator`.
         _predictions: Pipeline predictions on *_feature_data*.
+        artifacts_dir: Directory for storing evaluation artifacts.
     """
 
-    def __init__(self, pipeline: Pipeline, data: pd.DataFrame):
+    def __init__(
+        self,
+        pipeline: Pipeline,
+        data: pd.DataFrame,
+        metrics_path: str = "metrics.json",
+        artifacts_dir: str = "artifacts",
+    ):
         self._pipeline: Pipeline = pipeline
-        self._data = data
+        self._data: pd.DataFrame = data
+        self._metrics_path: Path = Path(metrics_path)
+        self._artifacts_dir: Path = Path(artifacts_dir)
         self._feature_data, self._target_data = DataValidator.validate_training_data(
             self._data
         )
         self._predictions = self._pipeline.predict(self._feature_data)
 
-    def evaluate(self) -> tuple[dict[str, float], list[str]]:
+    def evaluate(self) -> dict[str, float]:
         """
         Execute all evaluation steps.
 
         Returns:
-            Tuple ``(metrics, artefact_files)`` where
-
             * **metrics** - aggregated cross-validation scores.
-            * **artefact_files** - file paths to the generated plots.
         """
         metrics = self._cross_validate()
-        artifact_files: list[str] = []
-        artifact_files.append(self._prediction_plot())
-        artifact_files.append(self._feature_importance())
+        self._metrics_plot()
+        self._prediction_plot()
+        self._feature_importance_plot()
 
-        return metrics, artifact_files
+        return metrics
 
     def _cross_validate(self, cv: int = 5) -> dict[str, float]:
         """
@@ -75,6 +83,9 @@ class ModelEvaluator:
         Returns:
             Dictionary with mean and standard deviation of train/test RMSE and
             R² across folds.
+
+        Note:
+            The metrics are saved to the path specified in :attr:`_metrics_path`.
         """
         scoring = {
             "neg_rmse": "neg_root_mean_squared_error",
@@ -98,7 +109,7 @@ class ModelEvaluator:
         train_r2_mean, train_r2_std = _aggregate(scores["train_r2"])
         test_r2_mean, test_r2_std = _aggregate(scores["test_r2"])
 
-        return {
+        self._metrics = {
             "train_rmse_mean": train_rmse_mean,
             "train_rmse_std": train_rmse_std,
             "train_r2_mean": train_r2_mean,
@@ -109,9 +120,72 @@ class ModelEvaluator:
             "test_r2_std": test_r2_std,
         }
 
-    def _prediction_plot(
-        self, out_file: str | Path = "plots/true_vs_predicted.png"
-    ) -> str:
+        with open(self._metrics_path, "w") as file:
+            json.dump(self._metrics, file)
+
+        return self._metrics
+
+    def _metrics_plot(self, out_file: str | Path = "metrics.png") -> str:
+        """Create a bar plot comparing train and test metrics.
+
+        Args:
+            out_file: Destination PNG path. Parent directories are created if
+                necessary.
+
+        Returns:
+            Absolute path to the saved plot.
+        """
+
+        out_path = self._artifacts_dir / out_file
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        fig, ax1 = plt.subplots(figsize=(10, 6))
+        x = np.arange(2)
+        width = 0.35
+
+        # Plot RMSE on primary y-axis
+        ax1.bar(
+            x - width / 2,
+            [self._metrics["train_rmse_mean"], self._metrics["test_rmse_mean"]],
+            width,
+            label="RMSE",
+            yerr=[self._metrics["train_rmse_std"], self._metrics["test_rmse_std"]],
+            capsize=5,
+            color="tab:blue",
+        )
+        ax1.set_ylabel("RMSE Score", color="tab:blue")
+        ax1.tick_params(axis="y", labelcolor="tab:blue")
+
+        # Create secondary y-axis for R²
+        ax2 = ax1.twinx()
+        ax2.bar(
+            x + width / 2,
+            [self._metrics["train_r2_mean"], self._metrics["test_r2_mean"]],
+            width,
+            label="R²",
+            yerr=[self._metrics["train_r2_std"], self._metrics["test_r2_std"]],
+            capsize=5,
+            color="tab:orange",
+        )
+        ax2.set_ylabel("R² Score", color="tab:orange")
+        ax2.tick_params(axis="y", labelcolor="tab:orange")
+
+        # Combine legends
+        lines1, labels1 = ax1.get_legend_handles_labels()
+        lines2, labels2 = ax2.get_legend_handles_labels()
+        ax1.legend(lines1 + lines2, labels1 + labels2, loc="upper right")
+
+        plt.xlabel("Metric Type")
+        plt.title("Cross-validation Metrics")
+        plt.xticks(x, ["Train", "Test"])
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=150)
+        plt.close()
+
+        return str(out_path)
+
+    def _prediction_plot(self, out_file: str | Path = "true-vs-predicted.png") -> str:
         """
         Save a scatter plot of true vs. predicted values.
 
@@ -122,19 +196,19 @@ class ModelEvaluator:
         Returns:
             Absolute path to the saved plot.
         """
-        out_path = Path(out_file)
+        out_path = self._artifacts_dir / out_file
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         plt.figure(figsize=(6, 6))
-        plt.scatter(self._target_data, self._predictions, alpha=0.5)
+        plt.scatter(self._predictions, self._target_data, alpha=0.5)
         plt.plot(
-            [self._target_data.min(), self._target_data.max()],
+            [self._predictions.min(), self._predictions.max()],
             [self._target_data.min(), self._target_data.max()],
             linestyle="--",
             color="gray",
         )
-        plt.xlabel("True")
-        plt.ylabel("Predicted")
+        plt.xlabel("Predicted")
+        plt.ylabel("True")
         plt.title("True vs Predicted")
         plt.tight_layout()
         plt.savefig(out_path, dpi=150)
@@ -142,8 +216,8 @@ class ModelEvaluator:
 
         return str(out_path)
 
-    def _feature_importance(
-        self, out_file: str | Path = "plots/feature_importance.png"
+    def _feature_importance_plot(
+        self, out_file: str | Path = "feature-importance.png"
     ) -> str:
         """
         Save a horizontal bar chart of feature importances.
@@ -155,7 +229,7 @@ class ModelEvaluator:
         Returns:
             Absolute path to the saved plot.
         """
-        out_path = Path(out_file)
+        out_path = self._artifacts_dir / out_file
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         model = self._pipeline.named_steps["model"]

@@ -6,6 +6,9 @@ COPY training /app/training
 COPY core /app/core
 COPY requirements.train.txt /app/requirements.txt
 
+# Silence MLflow's Git warning
+ENV GIT_PYTHON_REFRESH=quiet
+
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 ENTRYPOINT ["python", "-m", "training.main"]
